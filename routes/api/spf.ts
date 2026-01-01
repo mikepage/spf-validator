@@ -98,9 +98,17 @@ async function fetchSpfRecordNative(domain: string): Promise<FetchSpfResult> {
   };
 }
 
+const DNS_NATIVE_TIMEOUT_MS = 2000;
+
 async function fetchSpfRecord(domain: string): Promise<FetchSpfResult> {
   try {
-    return await fetchSpfRecordNative(domain);
+    const result = await Promise.race([
+      fetchSpfRecordNative(domain),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("DNS timeout")), DNS_NATIVE_TIMEOUT_MS)
+      ),
+    ]);
+    return result;
   } catch {
     // Fallback to DNS-over-HTTPS (for Deno Deploy or restricted environments)
     try {

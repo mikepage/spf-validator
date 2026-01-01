@@ -31,18 +31,88 @@ interface LookupContext {
 const LOOKUP_MECHANISMS = ["include", "a", "mx", "ptr", "exists", "redirect"];
 const MAX_DNS_LOOKUPS = 10;
 
-async function fetchSpfRecord(domain: string): Promise<string | null> {
-  try {
-    const records = await Deno.resolveDns(domain, "TXT");
-    for (const record of records) {
-      const txt = Array.isArray(record) ? record.join("") : record;
-      if (txt.toLowerCase().startsWith("v=spf1")) {
-        return txt;
-      }
+interface FetchSpfResult {
+  record: string | null;
+  error?: string;
+  totalTxtRecords?: number;
+}
+
+interface GoogleDnsResponse {
+  Status: number;
+  Answer?: Array<{
+    type: number;
+    data: string;
+  }>;
+}
+
+async function fetchSpfRecordViaDoh(domain: string): Promise<FetchSpfResult> {
+  const url = `https://dns.google/resolve?name=${
+    encodeURIComponent(domain)
+  }&type=TXT`;
+  const response = await fetch(url, {
+    headers: { Accept: "application/dns-json" },
+  });
+
+  if (!response.ok) {
+    throw new Error(`DoH request failed: ${response.status}`);
+  }
+
+  const data: GoogleDnsResponse = await response.json();
+
+  if (data.Status !== 0) {
+    throw new Error(`DNS query failed with status ${data.Status}`);
+  }
+
+  const txtRecords = data.Answer?.filter((a) => a.type === 16) ?? [];
+
+  for (const record of txtRecords) {
+    const txt = record.data.replace(/^"|"$/g, "").replace(/"\s*"/g, "");
+    if (txt.toLowerCase().startsWith("v=spf1")) {
+      return { record: txt, totalTxtRecords: txtRecords.length };
     }
-    return null;
+  }
+
+  return {
+    record: null,
+    totalTxtRecords: txtRecords.length,
+    error: txtRecords.length > 0
+      ? `No SPF record found among ${txtRecords.length} TXT records`
+      : "No TXT records found",
+  };
+}
+
+async function fetchSpfRecordNative(domain: string): Promise<FetchSpfResult> {
+  const records = await Deno.resolveDns(domain, "TXT");
+  for (const record of records) {
+    const txt = Array.isArray(record) ? record.join("") : record;
+    if (txt.toLowerCase().startsWith("v=spf1")) {
+      return { record: txt, totalTxtRecords: records.length };
+    }
+  }
+  return {
+    record: null,
+    totalTxtRecords: records.length,
+    error: records.length > 0
+      ? `No SPF record found among ${records.length} TXT records`
+      : "No TXT records found",
+  };
+}
+
+async function fetchSpfRecord(domain: string): Promise<FetchSpfResult> {
+  try {
+    return await fetchSpfRecordNative(domain);
   } catch {
-    return null;
+    // Fallback to DNS-over-HTTPS (for Deno Deploy or restricted environments)
+    try {
+      return await fetchSpfRecordViaDoh(domain);
+    } catch (err) {
+      return {
+        record: null,
+        error: `DNS lookup failed: ${
+          err instanceof Error ? err.message : "Unknown error"
+        }`,
+      };
+    }
   }
 }
 
@@ -248,19 +318,24 @@ async function lookupSpf(
   const startTime = performance.now();
   const issues: SpfValidationIssue[] = [];
 
-  const record = await fetchSpfRecord(domain);
+  const spfResult = await fetchSpfRecord(domain);
 
-  if (!record) {
+  if (!spfResult.record) {
     return {
       domain,
       record: null,
       version: null,
       mechanisms: [],
       lookupCount: ctx.count,
-      issues: [{ type: "error", message: `No SPF record found for ${domain}` }],
+      issues: [{
+        type: "error",
+        message: spfResult.error || `No SPF record found for ${domain}`,
+      }],
       queryTime: Math.round(performance.now() - startTime),
     };
   }
+
+  const record = spfResult.record;
 
   const parsed = parseSpfRecord(record);
   issues.push(...parsed.issues);

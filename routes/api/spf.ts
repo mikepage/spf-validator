@@ -1,4 +1,5 @@
 import { define } from "../../utils.ts";
+import { resolveTxt } from "../../lib/dns.ts";
 
 interface SpfMechanism {
   type: string;
@@ -37,90 +38,31 @@ interface FetchSpfResult {
   totalTxtRecords?: number;
 }
 
-interface GoogleDnsResponse {
-  Status: number;
-  Answer?: Array<{
-    type: number;
-    data: string;
-  }>;
-}
-
-async function fetchSpfRecordViaDoh(domain: string): Promise<FetchSpfResult> {
-  const url = `https://dns.google/resolve?name=${
-    encodeURIComponent(domain)
-  }&type=TXT`;
-  const response = await fetch(url, {
-    headers: { Accept: "application/dns-json" },
-  });
-
-  if (!response.ok) {
-    throw new Error(`DoH request failed: ${response.status}`);
-  }
-
-  const data: GoogleDnsResponse = await response.json();
-
-  if (data.Status !== 0) {
-    throw new Error(`DNS query failed with status ${data.Status}`);
-  }
-
-  const txtRecords = data.Answer?.filter((a) => a.type === 16) ?? [];
-
-  for (const record of txtRecords) {
-    const txt = record.data.replace(/^"|"$/g, "").replace(/"\s*"/g, "");
-    if (txt.toLowerCase().startsWith("v=spf1")) {
-      return { record: txt, totalTxtRecords: txtRecords.length };
-    }
-  }
-
-  return {
-    record: null,
-    totalTxtRecords: txtRecords.length,
-    error: txtRecords.length > 0
-      ? `No SPF record found among ${txtRecords.length} TXT records`
-      : "No TXT records found",
-  };
-}
-
-async function fetchSpfRecordNative(domain: string): Promise<FetchSpfResult> {
-  const records = await Deno.resolveDns(domain, "TXT");
-  for (const record of records) {
-    const txt = Array.isArray(record) ? record.join("") : record;
-    if (txt.toLowerCase().startsWith("v=spf1")) {
-      return { record: txt, totalTxtRecords: records.length };
-    }
-  }
-  return {
-    record: null,
-    totalTxtRecords: records.length,
-    error: records.length > 0
-      ? `No SPF record found among ${records.length} TXT records`
-      : "No TXT records found",
-  };
-}
-
-const DNS_NATIVE_TIMEOUT_MS = 2000;
-
 async function fetchSpfRecord(domain: string): Promise<FetchSpfResult> {
   try {
-    const result = await Promise.race([
-      fetchSpfRecordNative(domain),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("DNS timeout")), DNS_NATIVE_TIMEOUT_MS)
-      ),
-    ]);
-    return result;
-  } catch {
-    // Fallback to DNS-over-HTTPS (for Deno Deploy or restricted environments)
-    try {
-      return await fetchSpfRecordViaDoh(domain);
-    } catch (err) {
-      return {
-        record: null,
-        error: `DNS lookup failed: ${
-          err instanceof Error ? err.message : "Unknown error"
-        }`,
-      };
+    const records = await resolveTxt(domain);
+
+    for (const record of records) {
+      const txt = typeof record === "string" ? record : String(record);
+      if (txt.toLowerCase().startsWith("v=spf1")) {
+        return { record: txt, totalTxtRecords: records.length };
+      }
     }
+
+    return {
+      record: null,
+      totalTxtRecords: records.length,
+      error: records.length > 0
+        ? `No SPF record found among ${records.length} TXT records`
+        : "No TXT records found",
+    };
+  } catch (err) {
+    return {
+      record: null,
+      error: `DNS lookup failed: ${
+        err instanceof Error ? err.message : "Unknown error"
+      }`,
+    };
   }
 }
 

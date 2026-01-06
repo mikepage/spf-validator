@@ -149,13 +149,13 @@ export default function SpfValidator() {
       const data = await response.json();
 
       if (!data.success) {
-        error.value = data.error || "SPF lookup failed";
+        error.value = data.error || "SPF validation failed";
         return;
       }
 
       result.value = data.result;
     } catch {
-      error.value = "Failed to perform SPF lookup";
+      error.value = "Failed to validate SPF record";
     } finally {
       isLoading.value = false;
     }
@@ -205,7 +205,7 @@ export default function SpfValidator() {
       {/* Input Section */}
       <div class="bg-white rounded-lg shadow p-6 mb-6">
         <h2 class="text-lg font-semibold text-gray-800 mb-4">
-          SPF Record Lookup
+          Validate SPF Record
         </h2>
 
         <div class="mb-4">

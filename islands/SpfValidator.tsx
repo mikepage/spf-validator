@@ -26,7 +26,6 @@ interface SpfResult {
 const Resolvers = [
   { value: "google", label: "Google DNS (DoH)" },
   { value: "cloudflare", label: "Cloudflare DNS (DoH)" },
-  { value: "native", label: "Native DNS" },
 ];
 
 function parseHash(hash: string): string | null {

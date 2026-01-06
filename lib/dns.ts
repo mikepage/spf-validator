@@ -1,13 +1,12 @@
 /**
  * DNS Resolver Module for SPF Lookups
  *
- * Provides TXT record resolution with multiple backends:
- * - Native Deno DNS (fastest, but unavailable on Deno Deploy)
+ * Provides TXT record resolution with DNS-over-HTTPS backends:
  * - Google DNS-over-HTTPS
  * - Cloudflare DNS-over-HTTPS
  */
 
-export type ResolverType = "native" | "google" | "cloudflare";
+export type ResolverType = "google" | "cloudflare";
 
 interface GoogleDnsResponse {
   Status: number;
@@ -101,74 +100,23 @@ export async function resolveWithCloudflareDoH(
     .map((a) => a.data.replace(/^"|"$/g, "").replace(/"\s*"/g, ""));
 }
 
-/**
- * Resolve TXT records using native Deno.resolveDns
- * Note: Not available on Deno Deploy
- */
-export async function resolveWithNative(domain: string): Promise<string[]> {
-  const records = await Deno.resolveDns(domain, "TXT");
-  return records.map((record) =>
-    Array.isArray(record) ? record.join("") : record
-  );
-}
-
-const DNS_NATIVE_TIMEOUT_MS = 2000;
-
 export interface ResolveOptions {
   resolver?: ResolverType;
-  timeout?: number;
-  fallbackResolvers?: ResolverType[];
 }
 
-const DEFAULT_FALLBACK_RESOLVERS: ResolverType[] = ["google", "cloudflare"];
-
 /**
- * Resolve TXT records with automatic fallback
- *
- * By default, tries native DNS first, then falls back to DoH providers.
+ * Resolve TXT records using DNS-over-HTTPS
  */
 export async function resolveTxt(
   domain: string,
   options: ResolveOptions = {},
 ): Promise<string[]> {
-  const {
-    resolver = "native",
-    timeout = DNS_NATIVE_TIMEOUT_MS,
-    fallbackResolvers = DEFAULT_FALLBACK_RESOLVERS,
-  } = options;
+  const { resolver = "google" } = options;
 
   const resolverFunctions: Record<ResolverType, (domain: string) => Promise<string[]>> = {
-    native: resolveWithNative,
     google: resolveWithGoogleDoH,
     cloudflare: resolveWithCloudflareDoH,
   };
 
-  // If not using native, go directly to the specified resolver
-  if (resolver !== "native") {
-    return resolverFunctions[resolver](domain);
-  }
-
-  // Try native with timeout, then fallback to DoH
-  try {
-    const result = await Promise.race([
-      resolveWithNative(domain),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("DNS timeout")), timeout)
-      ),
-    ]);
-    return result;
-  } catch {
-    // Try fallback resolvers in order
-    let lastError: Error | null = null;
-
-    for (const fallbackResolver of fallbackResolvers) {
-      try {
-        return await resolverFunctions[fallbackResolver](domain);
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-      }
-    }
-
-    throw lastError || new Error("All DNS resolvers failed");
-  }
+  return resolverFunctions[resolver](domain);
 }

@@ -311,7 +311,7 @@ async function lookupSpf(
   };
 }
 
-const VALID_RESOLVERS: ResolverType[] = ["native", "google", "cloudflare"];
+const VALID_RESOLVERS: ResolverType[] = ["google", "cloudflare"];
 
 export const handler = define.handlers({
   async GET(ctx) {

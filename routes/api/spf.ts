@@ -1,5 +1,5 @@
 import { define } from "../../utils.ts";
-import { resolveTxt } from "../../lib/dns.ts";
+import { resolveTxt, type ResolverType } from "../../lib/dns.ts";
 
 interface SpfMechanism {
   type: string;
@@ -27,6 +27,7 @@ interface LookupContext {
   count: number;
   maxLookups: number;
   visited: Set<string>;
+  resolver: ResolverType;
 }
 
 const LOOKUP_MECHANISMS = ["include", "a", "mx", "ptr", "exists", "redirect"];
@@ -38,9 +39,12 @@ interface FetchSpfResult {
   totalTxtRecords?: number;
 }
 
-async function fetchSpfRecord(domain: string): Promise<FetchSpfResult> {
+async function fetchSpfRecord(
+  domain: string,
+  resolver: ResolverType,
+): Promise<FetchSpfResult> {
   try {
-    const records = await resolveTxt(domain);
+    const records = await resolveTxt(domain, { resolver });
 
     for (const record of records) {
       const txt = typeof record === "string" ? record : String(record);
@@ -268,7 +272,7 @@ async function lookupSpf(
   const startTime = performance.now();
   const issues: SpfValidationIssue[] = [];
 
-  const spfResult = await fetchSpfRecord(domain);
+  const spfResult = await fetchSpfRecord(domain, ctx.resolver);
 
   if (!spfResult.record) {
     return {
@@ -307,10 +311,13 @@ async function lookupSpf(
   };
 }
 
+const VALID_RESOLVERS: ResolverType[] = ["native", "google", "cloudflare"];
+
 export const handler = define.handlers({
   async GET(ctx) {
     const url = new URL(ctx.req.url);
     const domain = url.searchParams.get("domain");
+    const resolverParam = url.searchParams.get("resolver") || "google";
 
     if (!domain) {
       return Response.json(
@@ -319,6 +326,17 @@ export const handler = define.handlers({
       );
     }
 
+    if (!VALID_RESOLVERS.includes(resolverParam as ResolverType)) {
+      return Response.json(
+        {
+          success: false,
+          error: `Invalid resolver: ${resolverParam}. Valid options: ${VALID_RESOLVERS.join(", ")}`,
+        },
+        { status: 400 },
+      );
+    }
+
+    const resolver = resolverParam as ResolverType;
     const cleanDomain = domain.trim().toLowerCase();
     if (
       !/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(cleanDomain) &&
@@ -335,6 +353,7 @@ export const handler = define.handlers({
         count: 0,
         maxLookups: MAX_DNS_LOOKUPS,
         visited: new Set([cleanDomain]),
+        resolver,
       };
 
       const result = await lookupSpf(cleanDomain, lookupContext);
@@ -349,6 +368,7 @@ export const handler = define.handlers({
 
       return Response.json({
         success: true,
+        resolver,
         result,
       });
     } catch (err) {
